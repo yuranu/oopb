@@ -28,6 +28,10 @@ readonly oopb__util__RESERVED_KEYWORDS=(
   var
   init
   fini
+  super
+  ref
+  is_a
+  typeof
 )
 
 # Calls a function if in debug mode
@@ -46,10 +50,10 @@ oopb::util::is_var_defined() {
 }
 
 # Check if class is defined. Can be identified by the presence of the
-# __is_blessed variable.
+# is_defined variable.
 oopb::util::is_class_defined() {
   oopb::util::valid_string "$1" || return 1
-  oopb::util::is_var_defined "${1}__is_blessed"
+  oopb::util::is_var_defined "${1}__is_defined"
 }
 
 # Gemerate a unique object_id
@@ -86,13 +90,13 @@ oopb::util::log() {
   echo >&2 -n "[$(date '+%Y-%m-%d %H:%M:%S')]: "
   if [[ $level -le "$oopb__util__CRITICAL" ]]; then
     echo >&2 -e "${oopb__util__RED}CRITICAL: $message${oopb__util__NC}"
-  elif [[ $level -le "${oopb__util__ERROR}" ]]; then
+    elif [[ $level -le "${oopb__util__ERROR}" ]]; then
     echo >&2 -e "${oopb__util__RED}ERROR: $message${oopb__util__NC}"
-  elif [[ $level -le "${oopb__util__WARNING}" ]]; then
+    elif [[ $level -le "${oopb__util__WARNING}" ]]; then
     echo >&2 -e "${oopb__util__YELLOW}WARNING: $message${oopb__util__NC}"
-  elif [[ $level -le "${oopb__util__INFO}" ]]; then
+    elif [[ $level -le "${oopb__util__INFO}" ]]; then
     echo >&2 -e "INFO: $message"
-  elif [[ $level -le "${oopb__util__DEBUG}" ]]; then
+    elif [[ $level -le "${oopb__util__DEBUG}" ]]; then
     echo >&2 -e "${oopb__util__BLUE}DEBUG: $message${oopb__util__NC}"
   else
     echo >&2 -e "${oopb__util__CYAN}TRACE: $message${oopb__util__NC}"
@@ -135,12 +139,6 @@ oopb::util::prototype_bases() {
   echo "${class_name}__prototype__bases"
 }
 
-# Outputs the name of a variable containing the virtual table for a class
-oopb::util::vt() {
-  local -r class_name="$1"
-  echo "${class_name}__vt"
-}
-
 # Outputs the name of a variable containing the object class
 oopb::util::object_class() {
   local -r object_id="$1"
@@ -157,10 +155,10 @@ oopb::util::object_vars() {
 oopb::util::validate_class() {
   local -r class_name="$1"
   oopb::util::is_class_defined "$class_name" ||
-    {
-      oopb::util::perror "Undefined class name '$class_name'"
-      return 1
-    }
+  {
+    oopb::util::perror "Undefined class name '$class_name'"
+    return 1
+  }
 }
 
 # Validate the object_id is a valid object of a valid class, or print an error
@@ -169,135 +167,136 @@ oopb::util::validate_object() {
   local -r object_id="$1"
   # Validate object id format
   [[ "$object_id" =~ ^_[a-f0-9]{8}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{12}$ ]] ||
-    {
-      oopb::util::perror "Invalid object id '$object_id'"
-      return 1
-    }
+  {
+    oopb::util::perror "Invalid object id '$object_id'"
+    return 1
+  }
   # Validate object class
   declare -n class_name="$(oopb::util::object_class $object_id)"
   oopb::util::validate_class "$class_name" ||
-    {
-      oopb::util::perror "Invalid object class '$class_name'"
-      return 1
-    }
+  {
+    oopb::util::perror "Invalid object class '$class_name'"
+    return 1
+  }
+}
+
+# Returns success iff the object or one of its bases has a variable with the
+# given name
+oopb::util::is_var() {
+  local -r object_id="$1"
+  local -r var_name="$2"
+  declare -n class_name="$(oopb::util::object_class $object_id)"
+  oopb::util::TRACE "Checking object $object_id $class_name for var $var_name"
+  # Iterate over the class and its bases. Remember that our clss is always the
+  # first in the list of bases.
+  declare -n bases_array="$(oopb::util::prototype_bases $class_name)"
+  for base in "${bases_array[@]}"; do
+    declare -n vars_array="$(oopb::util::prototype_vars $base)"
+    for var in "${vars_array[@]}"; do
+      if [[ "$var" == "$var_name" ]]; then
+        return 0
+      fi
+    done
+  done
+  return 1
 }
 
 # Declare a class
 # Input format:
-# oopb::class <class_name> [method <method_name> ...] [var <var_name> ...]
+# oopb::class <class_name> [extend <base_name> ...]
+#             [method <method_name> ...] [var <var_name> ...]
 oopb::class() {
+  # First - read the declaration, and validate it is correct. The output of
+  # this stage are three arrays: methods, vars and bases.
+  # TODO: consider making these associative arrays to support traits such as
+  # public/private/protected and possibly const.
   local -r class_name=$1
   shift
   oopb::util::valid_string "$class_name" ||
-    {
-      oopb::util::perror "Invalid class name '$class_name'"
-      return 1
-    }
+  {
+    oopb::util::perror "Invalid class name '$class_name'"
+    return 1
+  }
   oopb::util::TRACE "Declaring class $class_name"
-
+  
   local -a methods=()
   local -a vars=()
   local -a bases=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-    extend)
-      shift
-      base_name="$1"
-      shift
-      oopb::util::valid_string "$base_name" ||
+      extend)
+        shift
+        base_name="$1"
+        shift
+        oopb::util::valid_string "$base_name" ||
         {
           oopb::util::perror "Invalid base class name '$base_name'"
           return 1
         }
-      bases+=("$base_name")
-      oopb::util::TRACE "Extending class $base_name"
+        bases+=("$base_name")
+        oopb::util::TRACE "Extending class $base_name"
       ;;
-    method)
-      shift
-      method_name="$1"
-      shift
-      oopb::util::valid_string "$method_name" ||
+      method)
+        shift
+        method_name="$1"
+        shift
+        oopb::util::valid_string "$method_name" ||
         {
           oopb::util::perror "Invalid method name '$method_name'"
           return 1
         }
-      methods+=("$method_name")
-      oopb::util::TRACE "Declaring method $method_name"
+        methods+=("$method_name")
+        oopb::util::TRACE "Declaring method $method_name"
       ;;
-    var)
-      shift
-      var_name="$1"
-      shift
-      oopb::util::valid_string "$var_name" ||
+      var)
+        shift
+        var_name="$1"
+        shift
+        oopb::util::valid_string "$var_name" ||
         {
           oopb::util::perror "Invalid var name '$var_name'"
           return 1
         }
-      vars+=("$var_name")
-      oopb::util::TRACE "Declaring var $var_name"
+        vars+=("$var_name")
+        oopb::util::TRACE "Declaring var $var_name"
       ;;
-    *)
-      oopb::util::perror "Unexpected keyword '$1' in class declaration"
-      return 1
+      *)
+        oopb::util::perror "Unexpected keyword '$1' in class declaration"
+        return 1
       ;;
     esac
   done
-  # Register class prototype
+  # Now expand the bases.
+  local -a bases_expanded=()
+  # Iterate the bases in reverse order
+  for base_index in $(seq $((${#bases[@]} - 1)) -1 0); do
+    local base_name="${bases[$base_index]}"
+    oopb::util::TRACE "Expanding base class $base_name"
+    # Get the base class bases
+    declare -n base_bases="$(oopb::util::prototype_bases $base_name)"
+    # Iterate over the base class bases in reverse order
+    for base_base_index in $(seq $((${#base_bases[@]} - 1)) -1 0); do
+      local base_base_name="${base_bases[$base_base_index]}"
+      oopb::util::TRACE "Expanding base base class $base_base_name"
+      # If the base class base is not already in the expanded bases, add it
+      local found=false
+      for expanded_base in "${bases_expanded[@]}"; do
+        if [[ "$expanded_base" == "$base_base_name" ]]; then
+          found=true
+          break
+        fi
+      done
+      $found || bases_expanded=("$base_base_name" "${bases_expanded[@]}")
+    done
+  done
+  # For simplicity, we also prepend the class itself to its bases
+  bases_expanded=("$class_name" "${bases_expanded[@]}")
+  
+  # Now register the class prototype.
   eval "declare -ga $(oopb::util::prototype_methods $class_name)=(${methods[@]})"
   eval "declare -ga $(oopb::util::prototype_vars $class_name)=(${vars[@]})"
-  eval "declare -ga $(oopb::util::prototype_bases $class_name)=(${bases[@]})"
-}
-
-# Create the class virtual table
-# Input format:
-# oopb::bless <class_name>
-oopb::bless() {
-  local -r class_name="$1"
-  shift
-  declare -n bases_array="$(oopb::util::prototype_bases $class_name)"
-  declare -n methods_array="$(oopb::util::prototype_methods $class_name)"
-  declare -n vars_array="$(oopb::util::prototype_vars $class_name)"
-  local -r vt_name="$(oopb::util::vt $class_name)"
-
-  oopb::util::TRACE "Blessing class $class_name Bases: '${bases_array[@]}' " \
-    "Methods: '${methods_array[@]}' Vars: '${vars_array[@]}'"
-  # Validate all base classes are defined
-  for base in "${bases_array[@]}"; do
-    oopb::util::is_class_defined "$base" ||
-      {
-        oopb::util::perror "Base class $base is not defined"
-        return 1
-      }
-  done
-  # Validate that all methods are implemented
-  for method in "${methods_array[@]}"; do
-    oopb::util::is_cmd_defined "${class_name}::$method" ||
-      {
-        oopb::util::perror "Method $method is not implemented"
-        return 1
-      }
-  done
-  # Check if special methods init and fini are implemented and add them to the
-  # methods array.
-  oopb::util::is_cmd_defined "${class_name}::init" &&
-    methods_array=(init "${methods_array[@]}")
-  oopb::util::is_cmd_defined "${class_name}::fini" &&
-    methods_array=(fini "${methods_array[@]}")
-  # Add class methods to the virtual table.
-  # Create the virtual table
-  declare -gA $vt_name
-  declare -n vt="$vt_name"
-  for method in "${methods_array[@]}"; do
-    oopb::util::TRACE "Adding method $method to the virtual table"
-    vt[$method]="${class_name}::$method"
-  done
-
-  # For future use simplicity only, add the class name as a first element of
-  # in the base classes array
-  bases_array=("$class_name" "${bases_array[@]}")
-  # Finalize by setting __is_blessed to true
-  eval "${class_name}__is_blessed=true"
-  oopb::util::TRACE "Final virtual table $vt_name: ${vt[@]}"
+  eval "declare -ga $(oopb::util::prototype_bases $class_name)=(${bases_expanded[@]})"
+  eval "declare -g ${class_name}__is_defined=true"
 }
 
 # Initialize a new object and assign it to a variable
@@ -308,12 +307,12 @@ oopb::new() {
   shift
   local -r class_name="$1"
   shift
-
+  
   oopb::util::valid_string "$var_name" ||
-    {
-      oopb::util::perror "Invalid variable name '$var_name'"
-      return 1
-    }
+  {
+    oopb::util::perror "Invalid variable name '$var_name'"
+    return 1
+  }
   oopb::util::validate_class "$class_name" || return 1
   oopb::util::TRACE "Creating new object of class $class_name"
   local -r object_id=$(oopb::util::alloc_object_id)
@@ -329,11 +328,11 @@ oopb::new() {
   for var in "${vars_array[@]}"; do
     eval "declare -g ${vars_base}__${var}"
   done
-
+  
   # Call the init method. If it is not defined, it is OK.
   oopb::call "$object_id" init "$@"
   # Finaly assign the object to the variable
-  eval "$var_name=\"$object_id\""
+  eval "$var_name=\"oopb::util::dispatch $object_id \""
 }
 
 # Delete an object
@@ -357,7 +356,7 @@ oopb::del() {
       unset "${vars_base}__${var}"
     done
   done
-
+  
   # Last, unset the object class
   unset "$(oopb::util::object_class $object_id)"
 }
@@ -373,34 +372,53 @@ oopb::util::call() {
   shift
   local -r method_name="$1"
   shift
-
+  
   # We shifted all metadata arguments. The rest are the method arguments.
-
+  
   # Important trick: self, class_name and virtual_table_depth are local to this
   # function, so they are also visible from inside the called method. If,
   # however, the method calls another method, they will change to a different
   # value.
   local oopb__virtual_table_depth=$virtual_table_depth
-  local -r self=$object_id
-
+  local -r self="oopb::util::dispatch $object_id "
+  
   oopb::util::TRACE "Requested to call method $method_name on object" \
-    "$object_id of type $class_name with depth $oopb__virtual_table_depth"
-
+  "$object_id of type $class_name with depth $oopb__virtual_table_depth"
+  
   declare -n bases_array="$(oopb::util::prototype_bases $class_name)"
   local base_name="${bases_array[$oopb__virtual_table_depth]}"
-
+  
   # Iterate until we either find the method or reach the end of the base classes
   # array
   while [[ $oopb__virtual_table_depth -lt ${#bases_array[@]} ]]; do
     oopb::util::TRACE "Trying depth $oopb__virtual_table_depth, owner class" \
-      "$base_name"
-    declare -n vt="$(oopb::util::vt $base_name)"
-    local method_impl_name="${vt["$method_name"]}"
+    "$base_name"
+    declare -n vt="$(oopb::util::prototype_methods $base_name)"
+    # Check if the method is defined in the virtual table.
+    local method_impl_name=""
+    # Special case: init or fini methods are not in the virtual table
+    # In a special case of init or fini methods, it is OK to not have them
+    if [[ "$method_name" == "init" ]] || [[ "$method_name" == "fini" ]]; then
+      if oopb::util::is_cmd_defined "${base_name}::$method_name"; then
+        oopb::util::TRACE "Found method $method_name in class $base_name"
+        method_impl_name="${base_name}::$method_name"
+      fi
+    fi
+    # Check if the method is defined in the virtual table
+    if [[ -z "$method_impl_name" ]]; then
+      for method in "${vt[@]}"; do
+        if [[ "$method" == "$method_name" ]]; then
+          oopb::util::TRACE "Found method $method_name in class $base_name"
+          method_impl_name="$base_name::$method_name"
+          break
+        fi
+      done
+    fi
     # If the method is found in the virtual table, invoke it.
     if [[ -n "$method_impl_name" ]] &&
-      oopb::util::is_var_defined "method_impl_name"; then
+    oopb::util::is_var_defined "method_impl_name"; then
       oopb::util::TRACE "Calling method $method_name of owner class" \
-        "$base_name on object $object_id"
+      "$base_name on object $object_id"
       $method_impl_name "$@"
       return
     fi
@@ -408,7 +426,7 @@ oopb::util::call() {
     oopb__virtual_table_depth=$(($oopb__virtual_table_depth + 1))
     base_name="${bases_array[$oopb__virtual_table_depth]}"
   done
-
+  
   # In a special case of init or fini methods, it is OK to not have them
   if [[ "$method_name" == "init" ]] || [[ "$method_name" == "fini" ]]; then
     oopb::util::TRACE "Method $method_name not found in object $object_id"
@@ -427,7 +445,7 @@ oopb::call() {
   oopb::util::validate_object "$object_id" || return 1
   local -r method_name="$1"
   shift
-
+  
   declare -n class_name="$(oopb::util::object_class $object_id)"
   oopb::util::call "$object_id" "$class_name" 0 "$method_name" "$@"
 }
@@ -441,10 +459,10 @@ oopb::super() {
   oopb::util::validate_object "$object_id" || return 1
   local -r method_name="$1"
   shift
-
+  
   declare -n class_name="$(oopb::util::object_class $object_id)"
   oopb::util::call "$object_id" "$class_name" \
-    $(($oopb__virtual_table_depth + 1)) "$method_name" "$@"
+  $(($oopb__virtual_table_depth + 1)) "$method_name" "$@"
 }
 
 # Get a variable from an object
@@ -519,6 +537,70 @@ oopb::typeof() {
   oopb::util::validate_object "$object_id" || return 1
   declare -n object_class="$(oopb::util::object_class $object_id)"
   echo "$object_class"
+}
+
+# Invoke a requested operation on an object
+# Input format:
+# oopb::util::dispatch <object_id> .\s*operation
+oopb::util::dispatch() {
+  local -r object_id="$1"
+  shift
+  # Supported format is . either followed by a whitespace or not, and tehn an
+  # operation
+  local operation="$1"
+  if [[ "$operation" == '.' ]]; then
+    shift
+    operation="$1"
+  else
+    # Remove operation first character
+    operation="${operation:1}"
+  fi
+  case "$operation" in
+    super)
+      shift
+      oopb::util::TRACE "Super operation $operation"
+      oopb::super "$object_id" "$@"
+    ;;
+    ref)
+      shift
+      oopb::util::TRACE "Ref operation $operation"
+      oopb::ref "$object_id" "$@"
+    ;;
+    del)
+      shift
+      oopb::util::TRACE "Del operation $operation"
+      oopb::del "$object_id" "$@"
+    ;;
+    is_a)
+      shift
+      oopb::util::TRACE "Is_a operation $operation"
+      oopb::is_a "$object_id" "$@"
+    ;;
+    typeof)
+      shift
+      oopb::util::TRACE "Typeof operation $operation"
+      oopb::typeof "$object_id" "$@"
+    ;;
+    *)
+      # Is it an assignment?
+      if [[ "$operation" == *'='* ]]; then
+        oopb::util::TRACE "Assignment operation $operation"
+        local -r var_name="${operation%%=*}"
+        local -r value="${operation#*=}"
+        oopb::set "$object_id" "$var_name" "$value"
+      else
+        # Is it a variable?
+        if oopb::util::is_var "$object_id" "$operation"; then
+          oopb::util::TRACE "Get operation $operation"
+          oopb::get "$object_id" "$operation"
+        else
+          # Is it a method?
+          shift
+          oopb::util::TRACE "Call operation $operation"
+          oopb::call "$object_id" "$operation" "$@"
+        fi
+      fi
+  esac
 }
 
 ::call() { oopb::call "$@"; }
